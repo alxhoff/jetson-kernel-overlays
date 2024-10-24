@@ -1162,6 +1162,11 @@ int tegra_camera_update_clknbw(void *priv, bool stream_on)
 	struct tegra_camera_info *info;
 	int ret = 0;
 
+	/* TODO: workarouud for Xavier */
+	if (NULL == tegra_camera_misc.parent) {
+		return 0;
+	}
+
 	info = dev_get_drvdata(tegra_camera_misc.parent);
 	if (!info)
 		return -EINVAL;

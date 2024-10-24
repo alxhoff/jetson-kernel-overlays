@@ -44,6 +44,8 @@
 #define MAX9296_PIPE_X_DST_1_MAP_ADDR 0x410
 #define MAX9296_PIPE_X_SRC_2_MAP_ADDR 0x411
 #define MAX9296_PIPE_X_DST_2_MAP_ADDR 0x412
+#define MAX9296_PIPE_X_SRC_3_MAP_ADDR 0x413
+#define MAX9296_PIPE_X_DST_3_MAP_ADDR 0x414
 
 #define MAX9296_PIPE_X_ST_SEL_ADDR 0x50
 
@@ -259,6 +261,9 @@ void max9296_power_off(struct device *dev)
 
 	mutex_lock(&priv->lock);
 	priv->pw_ref--;
+
+	if (priv->pw_ref < 0)
+		priv->pw_ref = 0;
 
 	if (priv->pw_ref == 0) {
 		/* enter reset mode: XCLR */
@@ -779,6 +784,190 @@ ret:
 	return err;
 }
 EXPORT_SYMBOL(max9296_setup_streaming);
+
+static int max9296_set_registers(struct device *dev, struct reg_pair *map,
+				 u32 count)
+{
+	int err = 0;
+	u32 j = 0;
+
+	for (j = 0; j < count; j++) {
+		err = max9296_write_reg(dev,
+			map[j].addr, map[j].val);
+		if (err != 0)
+			break;
+	}
+
+	return err;
+}
+
+int max9296_get_available_pipe_id(struct device *dev, int vc_id)
+{
+	int i;
+	int pipe_id = -ENOMEM;
+	struct max9296 *priv = dev_get_drvdata(dev);
+
+	mutex_lock(&priv->lock);
+	for (i = 0; i < MAX9296_MAX_PIPES; i++) {
+		if (i == vc_id && !priv->pipe[i].st_count) {
+			priv->pipe[i].st_count++;
+			pipe_id = i;
+			break;
+		}
+	}
+	mutex_unlock(&priv->lock);
+
+	return pipe_id;
+}
+EXPORT_SYMBOL(max9296_get_available_pipe_id);
+
+int max9296_release_pipe(struct device *dev, int pipe_id)
+{
+	struct max9296 *priv = dev_get_drvdata(dev);
+
+	if (pipe_id < 0 || pipe_id >= MAX9296_MAX_PIPES)
+		return -EINVAL;
+
+	mutex_lock(&priv->lock);
+	priv->pipe[pipe_id].st_count = 0;
+	mutex_unlock(&priv->lock);
+
+	return 0;
+}
+EXPORT_SYMBOL(max9296_release_pipe);
+
+void max9296_reset_oneshot(struct device *dev)
+{
+	struct max9296 *priv = dev_get_drvdata(dev);
+
+	mutex_lock(&priv->lock);
+	if (priv->splitter_enabled) {
+		max9296_write_reg(dev, MAX9296_CTRL0_ADDR, 0x03);
+		max9296_write_reg(dev, MAX9296_CTRL0_ADDR, 0x23);
+	} else {
+		max9296_write_reg(dev, MAX9296_CTRL0_ADDR, 0x31);
+	}
+	/* delay to settle link */
+	msleep(100);
+	mutex_unlock(&priv->lock);
+}
+EXPORT_SYMBOL(max9296_reset_oneshot);
+
+static int __max9296_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
+			      u8 data_type2, u32 vc_id)
+{
+	int err = 0;
+	int i = 0;
+	u8 en_mapping_num = 0x0F;
+	u8 all_mapping_phy = 0x55;
+	struct reg_pair map_pipe_opt[] = {
+		{0x1458, 0x28}, // PHY A Optimization
+		{0x1459, 0x68}, // PHY A Optimization
+		{0x1558, 0x28}, // PHY B Optimization
+		{0x1559, 0x68}, // PHY B Optimization
+		// 4 lanes on port A, write 0x50 for 2 lanes
+		{MAX9296_LANE_CTRL1_ADDR, 0x50},
+		// 1500Mbps/lane on port A
+		{MAX9296_PHY1_CLK_ADDR, 0x2F},
+		// Do not un-double 8bpp (Un-double 8bpp data)
+		//{0x031C, 0x00},
+		// Do not un-double 8bpp
+		//{0x031F, 0x00},
+		// 0x02: ALT_MEM_MAP8, 0x10: ALT2_MEM_MAP8
+		{0x0473, 0x10},
+	};
+	struct reg_pair map_pipe_control[] = {
+		// Enable 4 mappings for Pipe X
+		{MAX9296_TX11_PIPE_X_EN_ADDR, 0x0F},
+		// Map data_type1 on vc_id
+		{MAX9296_PIPE_X_SRC_0_MAP_ADDR, 0x1E},
+		{MAX9296_PIPE_X_DST_0_MAP_ADDR, 0x1E},
+		// Map frame_start on vc_id
+		{MAX9296_PIPE_X_SRC_1_MAP_ADDR, 0x00},
+		{MAX9296_PIPE_X_DST_1_MAP_ADDR, 0x00},
+		// Map frame end on vc_id
+		{MAX9296_PIPE_X_SRC_2_MAP_ADDR, 0x01},
+		{MAX9296_PIPE_X_DST_2_MAP_ADDR, 0x01},
+		// Map data_type2 on vc_id
+		{MAX9296_PIPE_X_SRC_3_MAP_ADDR, 0x12},
+		{MAX9296_PIPE_X_DST_3_MAP_ADDR, 0x12},
+		// All mappings to PHY1 (master for port A)
+		{MAX9296_TX45_PIPE_X_DST_CTRL_ADDR, 0x55},
+		// SEQ_MISS_EN: Disabled / DIS_PKT_DET: Disabled
+		{0x0100, 0x23}, // pipe X
+	};
+
+	for (i = 0; i < 10; i++) {
+		map_pipe_control[i].addr += 0x40 * pipe_id;
+	}
+	map_pipe_control[10].addr += 0x12 * pipe_id;
+
+	if (data_type2 == 0x0) {
+		en_mapping_num = 0x07;
+		all_mapping_phy = 0x15;
+	}
+	map_pipe_control[0].val = en_mapping_num;
+	map_pipe_control[1].val = (vc_id << 6) | data_type1;
+	map_pipe_control[2].val = (vc_id << 6) | data_type1;
+	map_pipe_control[3].val = (vc_id << 6) | 0x00;
+	map_pipe_control[4].val = (vc_id << 6) | 0x00;
+	map_pipe_control[5].val = (vc_id << 6) | 0x01;
+	map_pipe_control[6].val = (vc_id << 6) | 0x01;
+	map_pipe_control[7].val = (vc_id << 6) | data_type2;
+	map_pipe_control[8].val = (vc_id << 6) | data_type2;
+	map_pipe_control[9].val = all_mapping_phy;
+	map_pipe_control[10].val = 0x23;
+
+	err |= max9296_set_registers(dev, map_pipe_control,
+				     ARRAY_SIZE(map_pipe_control));
+
+	err |= max9296_set_registers(dev, map_pipe_opt,
+				     ARRAY_SIZE(map_pipe_opt));
+
+	return err;
+}
+int max9296_init_settings(struct device *dev)
+{
+	int err = 0;
+	int i;
+	struct max9296 *priv = dev_get_drvdata(dev);
+
+	mutex_lock(&priv->lock);
+
+	for (i = 0; i < MAX9296_MAX_PIPES; i++)
+		err |= __max9296_set_pipe(dev, i, GMSL_CSI_DT_YUV422_8,
+					  GMSL_CSI_DT_EMBED, i);
+
+	mutex_unlock(&priv->lock);
+
+	return err;
+}
+EXPORT_SYMBOL(max9296_init_settings);
+
+int max9296_set_pipe(struct device *dev, int pipe_id,
+		     u8 data_type1, u8 data_type2, u32 vc_id)
+{
+	struct max9296 *priv = dev_get_drvdata(dev);
+	int err = 0;
+
+	if (pipe_id > (MAX9296_MAX_PIPES - 1)) {
+		dev_info(dev, "%s, input pipe_id: %d exceed max9296 max pipes\n",
+			 __func__, pipe_id);
+		return -EINVAL;
+	}
+
+	dev_dbg(dev, "%s pipe_id %d, data_type1 %u, data_type2 %u, vc_id %u\n",
+		__func__, pipe_id, data_type1, data_type2, vc_id);
+
+	mutex_lock(&priv->lock);
+
+	err = __max9296_set_pipe(dev, pipe_id, data_type1, data_type2, vc_id);
+
+	mutex_unlock(&priv->lock);
+
+	return err;
+}
+EXPORT_SYMBOL(max9296_set_pipe);
 
 static const struct of_device_id max9296_of_match[] = {
 	{ .compatible = "maxim,max9296", },

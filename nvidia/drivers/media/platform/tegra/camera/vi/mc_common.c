@@ -24,6 +24,10 @@
 #include <media/vi.h>
 #include <media/vi2_registers.h>
 
+#include <media/gmsl-link.h>
+#include <media/max9296.h>
+#include <media/max9295.h>
+
 #include "dev.h"
 #include "host1x/host1x.h"
 
@@ -166,6 +170,11 @@ static int vi_parse_dt(struct tegra_mc_vi *vi, struct platform_device *dev)
 	int i;
 	struct tegra_channel *item;
 	struct device_node *node = dev->dev.of_node;
+	struct device_node *dser_node = NULL;
+	struct i2c_client *dser_i2c = NULL;
+	struct device_node *ser_node = NULL;
+	struct i2c_client *ser_i2c = NULL;
+	dev_info(&dev->dev, "%s, parse max9295/max9296\n", __func__);
 
 	err = of_property_read_u32(node, "num-channels", &num_channels);
 	if (err) {
@@ -173,6 +182,29 @@ static int vi_parse_dt(struct tegra_mc_vi *vi, struct platform_device *dev)
 			"Failed to find num of channels, set to 0\n");
 		num_channels = 0;
 	}
+
+	vi->dser_dev = NULL;
+	dser_node = of_parse_phandle(node, "nvidia,gmsl-dser-device", 0);
+	if (dser_node) {
+		dser_i2c = of_find_i2c_device_by_node(dser_node);
+		of_node_put(dser_node);
+		if (dser_i2c) {
+			dev_info(&dev->dev, "dser_i2c->addr 0x%x", dser_i2c->addr);
+			vi->dser_dev = &dser_i2c->dev;
+		}
+	}
+
+	vi->ser_dev = NULL;
+	ser_node = of_parse_phandle(node, "nvidia,gmsl-ser-device", 0);
+	if (ser_node) {
+		ser_i2c = of_find_i2c_device_by_node(ser_node);
+		of_node_put(ser_node);
+		if (ser_i2c) {
+			dev_info(&dev->dev, "ser_i2c->addr 0x%x", ser_i2c->addr);
+			vi->ser_dev = &ser_i2c->dev;
+		}
+	}
+
 	vi->num_channels = num_channels;
 	for (i = 0; i < num_channels; i++) {
 		item = devm_kzalloc(vi->dev, sizeof(*item), GFP_KERNEL);

@@ -395,9 +395,9 @@ int max9295_reset_control(struct device *dev)
 
 		max9295_write_reg(dev, MAX9295_DEV_ADDR,
 					(prim_priv__->def_addr << 1));
-
-		max9295_write_reg(&prim_priv__->i2c_client->dev,
-					MAX9295_CTRL0_ADDR, MAX9295_RESET_ALL);
+		if (prim_priv__->pst2_ref == 0)
+			max9295_write_reg(&prim_priv__->i2c_client->dev,
+						MAX9295_CTRL0_ADDR, MAX9295_RESET_ALL);
 	}
 
 error:
@@ -474,6 +474,145 @@ static  struct regmap_config max9295_regmap_config = {
 	.val_bits = 8,
 	.cache_type = REGCACHE_RBTREE,
 };
+
+struct reg_pair {
+	u16 addr;
+	u8 val;
+};
+
+static int max9295_set_registers(struct device *dev, struct reg_pair *map,
+				 u32 count)
+{
+	int err = 0;
+	u32 j = 0;
+
+	for (j = 0; j < count; j++) {
+		err = max9295_write_reg(dev,
+			map[j].addr, map[j].val);
+		if (err != 0)
+			break;
+	}
+
+	return err;
+}
+
+static int __max9295_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
+			      u8 data_type2, u32 vc_id)
+{
+	int err = 0;
+	u8 bpp = 0x30;
+	static u8 pipe_x_val = 0x0;
+	struct reg_pair map_multi_pipe_en[] = {
+		{0x0315, 0x80},
+	};
+	struct reg_pair map_bpp8dbl[] = {
+		{0x0312, 0x0F},
+	};
+	struct reg_pair map_pipe_control[] = {
+		/* addr, val */
+		{MAX9295_PIPE_X_DT_ADDR, 0x5E}, // Pipe X pulls data_type1
+		{0x0315, 0x52}, // Pipe X pulls data_type2
+		{0x0309, 0x01}, // # Pipe X pulls vc_id
+		{0x030A, 0x00},
+		{0x031C, 0x30}, // BPP in pipe X
+		{0x0102, 0x0E}, // LIM_HEART Pipe X: Disabled
+	};
+
+	if (data_type1 == GMSL_CSI_DT_RAW_8 || data_type1 == GMSL_CSI_DT_EMBED
+	    || data_type2 == GMSL_CSI_DT_RAW_8 || data_type2 == GMSL_CSI_DT_EMBED) {
+		map_bpp8dbl[0].val |= (1 << pipe_id);
+	} else {
+		map_bpp8dbl[0].val &= ~(1 << pipe_id);
+	}
+	err |= max9295_set_registers(dev, map_bpp8dbl, ARRAY_SIZE(map_bpp8dbl));
+
+	if (data_type1 == GMSL_CSI_DT_RGB_888)
+		bpp = 0x18;
+
+	map_pipe_control[0].addr += 0x2 * pipe_id;
+	map_pipe_control[1].addr += 0x2 * pipe_id;
+	map_pipe_control[2].addr += 0x2 * pipe_id;
+	map_pipe_control[3].addr += 0x2 * pipe_id;
+	map_pipe_control[4].addr += 0x1 * pipe_id;
+	map_pipe_control[5].addr += 0x8 * pipe_id;
+
+	map_pipe_control[0].val = 0x40 | data_type1;
+	map_pipe_control[1].val = 0x40 | data_type2;
+	map_pipe_control[2].val = 1 << vc_id;
+	map_pipe_control[3].val = 0x00;
+	map_pipe_control[4].val = bpp;
+	map_pipe_control[5].val = 0x0E;
+
+	if (pipe_id == 0)
+		pipe_x_val = map_pipe_control[1].val;
+
+	err |= max9295_set_registers(dev, map_pipe_control,
+				     ARRAY_SIZE(map_pipe_control));
+
+	map_multi_pipe_en[0].val = 0x80 | pipe_x_val;
+	err |= max9295_set_registers(dev, map_multi_pipe_en,
+				     ARRAY_SIZE(map_multi_pipe_en));
+
+	return err;
+}
+
+int max9295_init_settings(struct device *dev)
+{
+	int err = 0;
+	int i;
+	struct max9295 *priv = dev_get_drvdata(dev);
+
+	struct reg_pair map_pipe_opt[] = {
+		// Enable all pipes
+		{MAX9295_PIPE_EN_ADDR, 0xF3},
+		// Write 0x33 for 4 lanes
+		{MAX9295_MIPI_RX1_ADDR, 0x11},
+		// All pipes pull clock from port B
+		{MAX9295_CSI_PORT_SEL_ADDR, 0x6F},
+		// All pipes pull data from port B
+		{MAX9295_START_PIPE_ADDR, 0xF0},
+	};
+
+	mutex_lock(&priv->lock);
+
+	// Init control
+	err |= max9295_set_registers(dev, map_pipe_opt,
+				     ARRAY_SIZE(map_pipe_opt));
+
+	for (i = 0; i < MAX9295_MAX_PIPES; i++)
+		err |= __max9295_set_pipe(dev, i, GMSL_CSI_DT_YUV422_8,
+					  GMSL_CSI_DT_EMBED, i);
+
+	mutex_unlock(&priv->lock);
+
+	return err;
+}
+EXPORT_SYMBOL(max9295_init_settings);
+
+int max9295_set_pipe(struct device *dev, int pipe_id,
+		     u8 data_type1, u8 data_type2, u32 vc_id)
+{
+	struct max9295 *priv = dev_get_drvdata(dev);
+	int err = 0;
+
+	if (pipe_id > (MAX9295_MAX_PIPES - 1)) {
+		dev_info(dev, "%s, input pipe_id: %d exceed max9295 max pipes\n",
+			 __func__, pipe_id);
+		return -EINVAL;
+	}
+
+	dev_dbg(dev, "%s pipe_id %d, data_type1 %u, data_type2 %u, vc_id %u\n",
+		__func__, pipe_id, data_type1, data_type2, vc_id);
+
+	mutex_lock(&priv->lock);
+
+	err = __max9295_set_pipe(dev, pipe_id, data_type1, data_type2, vc_id);
+
+	mutex_unlock(&priv->lock);
+
+	return err;
+}
+EXPORT_SYMBOL(max9295_set_pipe);
 
 static int max9295_probe(struct i2c_client *client,
 				const struct i2c_device_id *id)

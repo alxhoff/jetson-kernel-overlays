@@ -25,6 +25,7 @@
 #ifndef __MAX9296_H__
 #define __MAX9296_H__
 
+#include <linux/types.h>
 #include <media/gmsl-link.h>
 /**
  * \defgroup max9296 MAX9296 deserializer driver
@@ -34,6 +35,12 @@
  * @ingroup serdes_group
  * @{
  */
+
+int max9296_get_available_pipe_id(struct device *dev, int vc_id);
+int max9296_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
+		     u8 data_type2, u32 vc_id);
+int max9296_release_pipe(struct device *dev, int pipe_id);
+void max9296_reset_oneshot(struct device *dev);
 
 /**
  * Puts a deserializer device in single exclusive link mode, so link-specific
@@ -159,6 +166,7 @@ int max9296_power_on(struct device *dev);
  */
 void max9296_power_off(struct device *dev);
 
+int max9296_init_settings(struct device *dev);
 /** @} */
 
 #endif  /* __MAX9296_H__ */

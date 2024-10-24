@@ -42,6 +42,7 @@
 #define	ENABLE		1
 #define	DISABLE		0
 #define MAX_SYNCPT_PER_CHANNEL	3
+#define MAX_CHANNELS 6
 
 #define CAPTURE_MIN_BUFFERS	1U
 #define CAPTURE_MAX_BUFFERS	240U
@@ -231,6 +232,23 @@ struct tegra_channel {
 	unsigned int embedded_data_width;
 	unsigned int embedded_data_height;
 
+	struct {
+		struct video_device *video;
+		struct mutex lock;
+		spinlock_t spin_lock;
+		struct vb2_queue queue;
+		/*FIXME: 16 is max queued metadata buffers
+		* define 16
+		*/
+		struct vb2_buffer *buffers[16];
+		unsigned int head;
+		unsigned int tail;
+		unsigned int num_buffers;
+		void *alloc_ctx;
+		struct media_pad pad;
+		struct v4l2_ctrl_handler ctrl_handler;
+	} embedded;
+
 	DECLARE_BITMAP(fmts_bitmap, MAX_FORMAT_NUM);
 	atomic_t power_on_refcnt;
 	struct v4l2_fh *fh;
@@ -308,6 +326,9 @@ struct tegra_mc_vi {
 
 	unsigned int num_channels;
 	unsigned int num_subdevs;
+
+	struct device *dser_dev;
+	struct device *ser_dev;
 
 	struct tegra_csi_device *csi;
 	struct list_head vi_chans;
@@ -413,7 +434,9 @@ struct tegra_channel_buffer *dequeue_inflight(struct tegra_channel *chan);
 int tegra_channel_set_power(struct tegra_channel *chan, bool on);
 
 int tegra_channel_init_video(struct tegra_channel *chan);
+int tegra_channel_init_video_embedded(struct tegra_channel *chan);
 int tegra_channel_cleanup_video(struct tegra_channel *chan);
+int tegra_channel_cleanup_video_embedded(struct tegra_channel *chan);
 
 struct tegra_vi_fops {
 	int (*vi_power_on)(struct tegra_channel *chan);

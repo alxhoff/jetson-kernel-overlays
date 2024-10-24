@@ -210,6 +210,27 @@ config NV_VIRTUAL_I2C_MUX
 
 	  To compile this driver as a module, choose M here: the module
 	  will be called virtual_i2c_mux.
+
+config VIDEO_D4XX
+	tristate "D4XX camera sensor support"
+	depends on I2C && VIDEO_V4L2 && VIDEO_V4L2_SUBDEV_API
+	help
+		This is a Video4Linux2 sensor-level driver for the Intel
+		D4XX depth camera sensor
+
+		To compile this driver as a module, choose M here: the module
+		will be called d4xx.
+
+config VIDEO_D4XX_SERDES
+	bool "D4XX camera sensor setup with Maxim Serdes"
+	depends on VIDEO_D4XX
+        default y
+	help
+		This is a Video4Linux2 sensor-level driver for the Intel
+		D4XX depth camera sensor
+
+                This option is for setup with Maxim Serdes.
+
 endmenu
 
 endif

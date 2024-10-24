@@ -25,6 +25,7 @@
 #ifndef __MAX9295_H__
 #define __MAX9295_H__
 
+#include <linux/types.h>
 #include <media/gmsl-link.h>
 /**
  * \defgroup max9295 MAX9295 serializer driver
@@ -35,6 +36,8 @@
  * @{
  */
 
+int max9295_set_pipe(struct device *dev, int pipe_id, u8 data_type1,
+		     u8 data_type2, u32 vc_id);
 
 /**
  * @brief  Powers on a serializer device and performs the I2C overrides
@@ -95,6 +98,7 @@ int max9295_sdev_unpair(struct device *dev, struct device *s_dev);
  */
 int max9295_setup_streaming(struct device *dev);
 
+int max9295_init_settings(struct device *dev);
 /** @} */
 
 #endif  /* __MAX9295_H__ */
